@@ -86,5 +86,64 @@ local function search_path(name)
   exit(2)
 end
 
+local function exec_format_error()
+  write(stderr, string.format("exec format error\n"))
+  exit(3)
+end
+
+local CLE_LUA53   = 0x1
+local CLE_EXEC    = 0x2
+local CLE_STATIC  = 0x4
+
+local load_cle
 local function load_library(name)
+  local lfd = search_path(name)
+  return load_cle(lfd)
+end
+
+local function read_link(fd)
+  local nlen = read(fd, 1)
+  if nlen then nlen = nlen:byte() else exec_format_error() end
+
+  local name = read(fd, nlen)
+  if not name then exec_format_error() end
+
+  return name
+end
+
+load_cle = function(fd, mustbeexec)
+  local header = read(fd, 4)
+  if header ~= "clex" then
+    exec_format_error()
+  end
+
+  local flags = read(fd, 1)
+  if flags then flags = flags:byte() else exec_format_error() end
+
+  if mustbeexec and bit32.band(flags, CLE_EXEC) ~= CLE_EXEC then
+    exec_format_error()
+  end
+
+  local nlink = read(fd, 1)
+  if nlink then nlink = nlink:byte() else exec_format_error() end
+
+  if bit32.band(flags, CLE_STATIC) ~= 0 then
+    exec_format_error()
+  end
+
+  if bit32.band(flags, CLE_LUA53) == CLE_LUA53 and _VERSION ~= "Lua 5.3" then
+    exec_format_error()
+  end
+
+  -- Read away the interpreter header.
+  read_link(fd)
+
+  local libs = {}
+  for _=1, nlink, 1 do
+    local name = read_link(fd)
+    libs[#libs+1] = name
+    if not lib_cache[name] then
+      lib_cache[name] = load_library(name)
+    end
+  end
 end
