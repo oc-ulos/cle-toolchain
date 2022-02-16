@@ -4,6 +4,7 @@
 
 local args = table.pack(...)
 local env = {}
+local ldcache
 
 -- When running under Cynosure, we get a table of arguments
 -- and a table of environment variables. Under Linux, and most
@@ -17,12 +18,11 @@ end
 -- then create thin wrappers around the io library for open/read/
 -- close; otherwise, create thin wrappers around the corresponding
 -- system calls.
-local open, read, write, close, stderr
+local open, read, write, close, exit, stderr
 
--- Cynosure provides a system call, global(), to make certain variables
--- globally available. If that is not present, package.ldcache will be
--- used instead.
-local lib_cache
+-- Cynosure 2 provides the CLE interpreter with a library cache as
+-- the second argument, just after the file descriptor. If we're
+-- not running under Cynosure 2, we use package.ldcache instead.
 
 if syscall then
   open = function(path, mode) return syscall("open", path, mode) end
@@ -31,7 +31,7 @@ if syscall then
   close = function(fd) return syscall("close", fd) end
   exit = function(n) return syscall("exit", n) end
   stderr = 2
-  lib_cache = syscall("global", "ld_cache", "table")
+  ldcache = args[2]
 else
   open = function(path, mode) return io.open(path, mode) end
   read = function(fd, format) return fd.read(fd, format) end
@@ -40,7 +40,7 @@ else
   exit = os.exit
   stderr = io.stderr
   package.ldcache = package.ldcache or {}
-  lib_cache = package.ldcache
+  ldcache = package.ldcache
 end
 
 if #args == 0 then
@@ -55,22 +55,18 @@ GPLv3.
 ]])
 end
 
--- If we're passed a file descriptor, then return a function.
--- Otherwise, execute the file directly.
-local return_function = true
 local fd
 
 if type(args[1]) == "string" then
-  return_function = false
   local err
   fd, err = open(args[1], "r")
   if not fd then
     write(stderr, string.format("%s: %s\n", args[1], tostring(err)))
     exit(1)
   end
+else
+  fd = args[1]
 end
-
-assert(return_function)
 
 local paths = {
   "/lib",
@@ -97,34 +93,37 @@ local CLE_STATIC  = 0x4
 
 local load_cle
 local function load_library(name)
+  if ldcache[name] then
+    return ldcache[name]
+  end
   local lfd = search_path(name)
-  return load_cle(lfd)
+  return load_cle(lfd)()
 end
 
-local function read_link(fd)
-  local nlen = read(fd, 1)
+local function read_link(lfd)
+  local nlen = read(lfd, 1)
   if nlen then nlen = nlen:byte() else exec_format_error() end
 
-  local name = read(fd, nlen)
+  local name = read(lfd, nlen)
   if not name then exec_format_error() end
 
   return name
 end
 
-load_cle = function(fd, mustbeexec)
-  local header = read(fd, 4)
+load_cle = function(lfd, mustbeexec)
+  local header = read(lfd, 4)
   if header ~= "clex" then
     exec_format_error()
   end
 
-  local flags = read(fd, 1)
+  local flags = read(lfd, 1)
   if flags then flags = flags:byte() else exec_format_error() end
 
   if mustbeexec and bit32.band(flags, CLE_EXEC) ~= CLE_EXEC then
     exec_format_error()
   end
 
-  local nlink = read(fd, 1)
+  local nlink = read(lfd, 1)
   if nlink then nlink = nlink:byte() else exec_format_error() end
 
   if bit32.band(flags, CLE_STATIC) ~= 0 then
@@ -136,14 +135,32 @@ load_cle = function(fd, mustbeexec)
   end
 
   -- Read away the interpreter header.
-  read_link(fd)
+  read_link(lfd)
 
   local libs = {}
   for _=1, nlink, 1 do
     local name = read_link(fd)
     libs[#libs+1] = name
-    if not lib_cache[name] then
-      lib_cache[name] = load_library(name)
-    end
+    ldcache[name] = load_library(name)
   end
+
+  local data = read(fd, "a")
+
+  close(lfd)
+
+  local ok, err = load(data, "=cle-data")
+  if not err then
+    write(stderr, err .. "\n")
+    exit(3)
+  end
+
+  local success, result = xpcall(ok, debug.traceback, args, env)
+  if not success then
+    write(stderr, result .. "\n")
+    exit(4)
+  end
+
+  return result
 end
+
+return load_cle(fd)
