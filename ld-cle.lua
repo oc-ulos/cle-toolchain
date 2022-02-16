@@ -110,6 +110,10 @@ local function read_link(lfd)
   return name
 end
 
+local function getlink(name)
+  return ldcache[name]
+end
+
 load_cle = function(lfd, mustbeexec)
   local header = read(lfd, 4)
   if header ~= "clex" then
@@ -148,13 +152,20 @@ load_cle = function(lfd, mustbeexec)
 
   close(lfd)
 
-  local ok, err = load(data, "=cle-data")
+  local ok, err = load(data, "=cle-data", "t", _G)
   if not err then
     write(stderr, err .. "\n")
     exit(3)
   end
 
-  local success, result = xpcall(ok, debug.traceback, args, env)
+  local pargs = {}
+  if mustbeexec then
+    pargs = table.pack(table.unpack(args, 3))
+  end
+
+  _G.cle_getlib = getlink
+  local success, result = xpcall(ok, debug.traceback, pargs, env)
+  _G.cle_getlib = nil
   if not success then
     write(stderr, result .. "\n")
     exit(4)
