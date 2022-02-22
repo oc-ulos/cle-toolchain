@@ -110,8 +110,9 @@ local function read_link(lfd)
   return name
 end
 
+local req = require
 local function getlink(name)
-  return ldcache[name]
+  return ldcache[name] or req(name)
 end
 
 load_cle = function(lfd, mustbeexec)
@@ -163,9 +164,9 @@ load_cle = function(lfd, mustbeexec)
     pargs = table.pack(table.unpack(args, 3))
   end
 
-  _G.cle_getlib = getlink
+  _G.require = getlink
   local success, result = xpcall(ok, debug.traceback, pargs, env)
-  _G.cle_getlib = nil
+  _G.require = nil
   if not success then
     write(stderr, result .. "\n")
     exit(4)
