@@ -24,7 +24,8 @@ local open, read, write, close, exit, stderr
 -- the second argument, just after the file descriptor. If we're
 -- not running under Cynosure 2, we use package.ldcache instead.
 
-if syscall then
+if type(args[3]) == "table" then
+  local function syscall(...) return coroutine.yield("syscall", ...) end
   open = function(path, mode) return syscall("open", path, mode) end
   read = function(fd, format) return syscall("read", fd, format) end
   write = function(fd, ...) return syscall("write", fd, ...) end
@@ -47,8 +48,8 @@ if #args == 0 then
   write(stderr, [[
 usage: ld-cle FILE ...
 
-Load and execute a CLE file. Supports both static
-and dynamic linking.
+Load and execute a dynamically linked CLE file.
+Cannot load statically linked CLEs.
 
 Copyright (c) 2022 Ocawesome101 under the GNU
 GPLv3.
@@ -112,7 +113,7 @@ end
 
 local req = require
 local function getlink(name)
-  return ldcache[name] or req(name)
+  return ldcache[name] or (req and req(name))
 end
 
 load_cle = function(lfd, mustbeexec)
@@ -164,9 +165,10 @@ load_cle = function(lfd, mustbeexec)
     pargs = table.pack(table.unpack(args, 3))
   end
 
+  local oreq = _G.require
   _G.require = getlink
   local success, result = xpcall(ok, debug.traceback, pargs, env)
-  _G.require = nil
+  _G.require = oreq
   if not success then
     write(stderr, result .. "\n")
     exit(4)
